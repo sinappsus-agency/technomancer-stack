@@ -1,0 +1,56 @@
+<clickhouse>
+    <!-- ClickHouse user configuration for Plausible Analytics -->
+    <!-- Mounted at /etc/clickhouse-server/users.d/logging.xml -->
+    <!-- Reduces query log verbosity to keep disk usage low on small VPS. -->
+
+    <profiles>
+        <default>
+            <!-- Disable query result caching (Plausible manages its own cache) -->
+            <use_uncompressed_cache>0</use_uncompressed_cache>
+
+            <!-- Reduce memory limit per query -->
+            <max_memory_usage>1073741824</max_memory_usage>
+            <!-- 1 GB per query — reduce further if VPS has <4GB RAM -->
+
+            <!-- Log only slow queries to reduce I/O -->
+            <log_queries>1</log_queries>
+            <log_query_threads>0</log_query_threads>
+            <!-- Only log queries slower than 1 second -->
+            <log_queries_min_type>QUERY_FINISH</log_queries_min_type>
+
+            <!-- Prevent runaway queries -->
+            <max_execution_time>60</max_execution_time>
+        </default>
+    </profiles>
+
+    <users>
+        <default>
+            <!-- Restrict to localhost connections only (Plausible is on same Docker network) -->
+            <networks>
+                <ip>::1</ip>
+                <ip>127.0.0.1</ip>
+                <!-- Allow connections from Docker backend network -->
+                <ip>10.0.0.0/8</ip>
+                <ip>172.16.0.0/12</ip>
+                <ip>192.168.0.0/16</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <!-- No password for internal Docker network — access is restricted by network isolation -->
+            <password></password>
+        </default>
+    </users>
+
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
+</clickhouse>

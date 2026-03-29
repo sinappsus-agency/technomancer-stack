@@ -1,0 +1,207 @@
+{
+  "name": "Meeting Transcript Processor",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-transcript",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-transcript",
+      "name": "Transcript Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Receives a meeting transcript. POST body should include: transcript (string), client_name (string), meeting_type (string, e.g. 'discovery', 'review', 'scrum'), meeting_date (ISO string). Can be triggered manually from n8n UI by pasting a transcript."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "transcript-text",
+              "name": "transcript",
+              "value": "={{ $json.body.transcript }}",
+              "type": "string"
+            },
+            {
+              "id": "client-name",
+              "name": "client_name",
+              "value": "={{ $json.body.client_name ?? 'Unknown Client' }}",
+              "type": "string"
+            },
+            {
+              "id": "meeting-type",
+              "name": "meeting_type",
+              "value": "={{ $json.body.meeting_type ?? 'general' }}",
+              "type": "string"
+            },
+            {
+              "id": "meeting-date",
+              "name": "meeting_date",
+              "value": "={{ $json.body.meeting_date ?? $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "id": "file-slug",
+              "name": "file_slug",
+              "value": "={{ ($json.body.client_name ?? 'meeting').toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + DateTime.fromISO($json.body.meeting_date ?? $now.toISO()).toFormat('yyyyMMdd') }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "extract-inputs",
+      "name": "Extract Inputs",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "mistral"
+            },
+            {
+              "name": "prompt",
+              "value": "=You are a professional meeting assistant. Process the following meeting transcript and extract:\n\n1. SUMMARY: 3-5 sentence overview of what was discussed\n2. DECISIONS: Bullet list of all decisions made\n3. ACTION ITEMS: Each item in format: '[ ] [Person] — [Action] — [Due: date or ASAP]'\n4. FOLLOW-UP EMAIL: A professional follow-up email draft (Subject line + body, ready to send)\n5. KEY INSIGHTS: Any important client signals, concerns, or opportunities mentioned\n\nMeeting context:\n- Client: {{ $('Extract Inputs').item.json.client_name }}\n- Meeting type: {{ $('Extract Inputs').item.json.meeting_type }}\n- Date: {{ $('Extract Inputs').item.json.meeting_date }}\n\nTRANSCRIPT:\n{{ $('Extract Inputs').item.json.transcript }}\n\nFormat your response with clear markdown headings for each section."
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "process-with-ollama",
+      "name": "Process with Ollama (Local)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "notes": "Sends transcript to Ollama running locally in Docker. Uses mistral by default — good balance of speed and quality for meeting processing. Swap to llama3 for larger/more complex transcripts. All processing stays on your VPS — transcript never leaves your server."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "processed-output",
+              "name": "processed_output",
+              "value": "={{ $json.response }}",
+              "type": "string"
+            },
+            {
+              "id": "markdown-doc",
+              "name": "markdown_doc",
+              "value": "=# Meeting Notes: {{ $('Extract Inputs').item.json.client_name }}\n\n**Date:** {{ $('Extract Inputs').item.json.meeting_date }}\n**Type:** {{ $('Extract Inputs').item.json.meeting_type }}\n**Processed:** {{ $now.toFormat('dd MMM yyyy HH:mm') }}\n\n---\n\n{{ $json.response }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "format-output",
+      "name": "Format Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://minio:9000/clients/{{ $('Extract Inputs').item.json.file_slug }}/meeting-notes.md",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "rawBody": "={{ $('Format Output').item.json.markdown_doc }}",
+        "options": {}
+      },
+      "id": "save-to-minio",
+      "name": "Save Notes to MinIO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 200],
+      "notes": "Saves the processed meeting notes as a markdown file in the client's MinIO folder. Creates the folder automatically if it does not exist."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=📋 *Meeting Processed*\n\n👤 *{{ $('Extract Inputs').item.json.client_name }}*\n📅 {{ $('Extract Inputs').item.json.meeting_type }} — {{ $('Extract Inputs').item.json.meeting_date }}\n\n{{ $('Format Output').item.json.processed_output.substring(0, 800) }}...\n\n📁 Full notes saved to MinIO: `clients/{{ $('Extract Inputs').item.json.file_slug }}/meeting-notes.md`",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-telegram",
+      "name": "Send Summary to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 400],
+      "notes": "Sends the first 800 chars of the processed output to Telegram as a preview. Full notes are always saved to MinIO regardless."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"file\": \"clients/{{ $('Extract Inputs').item.json.file_slug }}/meeting-notes.md\"}",
+        "options": {}
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "Transcript Webhook": {
+      "main": [
+        [{"node": "Extract Inputs", "type": "main", "index": 0}]
+      ]
+    },
+    "Extract Inputs": {
+      "main": [
+        [{"node": "Process with Ollama (Local)", "type": "main", "index": 0}]
+      ]
+    },
+    "Process with Ollama (Local)": {
+      "main": [
+        [{"node": "Format Output", "type": "main", "index": 0}]
+      ]
+    },
+    "Format Output": {
+      "main": [
+        [
+          {"node": "Save Notes to MinIO", "type": "main", "index": 0},
+          {"node": "Send Summary to Telegram", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Save Notes to MinIO": {
+      "main": [
+        [{"node": "Respond Success", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Takes a raw meeting transcript and uses local Ollama (mistral) to generate: a structured summary, decision list, action items checklist, ready-to-send follow-up email, and key client insights. Saves the full output as a markdown file in the client's MinIO folder and previews it via Telegram. All processing is local — transcript never leaves your server.",
+    "chapter_reference": "Part II, Chapter 9 — Running AI Locally",
+    "repo_path": "n8n-templates/meeting-transcript-processor.json",
+    "n8n_variables_required": [
+      "TELEGRAM_CHAT_ID"
+    ],
+    "setup_instructions": "1. Set TELEGRAM_CHAT_ID. 2. Add MinIO S3 or httpHeaderAuth credential. 3. Paste webhook URL into your meeting note workflow or trigger manually via n8n UI. 4. To use with Google Meet / Zoom: export transcript as text, paste into a POST request to this webhook. 5. To use with Whisper transcription: chain with a prior Whisper-transcribe workflow and pass the output as 'transcript' in the body."
+  }
+}

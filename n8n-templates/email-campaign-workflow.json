@@ -1,0 +1,337 @@
+{
+  "name": "Email Campaign — Drip Sequence (3-Touch)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "email-campaign-start",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode"
+      },
+      "name": "Webhook — Campaign Brief Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "email-campaign-start",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "n8n Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\n// Validate required fields\nconst required = ['campaign_name', 'audience_segment', 'campaign_type', 'from_name', 'from_email', 'reply_to'];\nconst missing = required.filter(f => !body[f]);\n\nif (missing.length > 0) {\n  throw new Error(`Missing required fields: ${missing.join(', ')}`);\n}\n\n// Sanitise inputs — strip HTML from all string fields\nfunction stripHtml(str) {\n  return String(str).replace(/<[^>]*>/g, '').trim();\n}\n\nreturn [{\n  json: {\n    campaign_name: stripHtml(body.campaign_name),\n    audience_segment: stripHtml(body.audience_segment),\n    campaign_type: stripHtml(body.campaign_type), // welcome | nurture | re-engagement | promotional\n    from_name: stripHtml(body.from_name),\n    from_email: stripHtml(body.from_email),\n    reply_to: stripHtml(body.reply_to),\n    topic: stripHtml(body.topic || ''),\n    offer: stripHtml(body.offer || ''),\n    cta_url: stripHtml(body.cta_url || ''),\n    delay_email_2_hours: parseInt(body.delay_email_2_hours || '48', 10),\n    delay_email_3_hours: parseInt(body.delay_email_3_hours || '96', 10),\n    created_at: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Validate and Sanitise Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT contact_email, first_name FROM notifuse_contacts WHERE segment = $1 AND unsubscribed = false AND bounced = false ORDER BY created_at DESC LIMIT 500;",
+        "additionalFields": {
+          "queryParams": "={{ [$json.audience_segment] }}"
+        }
+      },
+      "name": "Fetch Audience Segment (PostgreSQL)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama3.2:3b",
+        "prompt": "You are a professional email copywriter for {{$node['Validate and Sanitise Input'].json.from_name}}.\n\nWrite Email 1 of a 3-part email sequence.\n\nCampaign type: {{$node['Validate and Sanitise Input'].json.campaign_type}}\nTopic: {{$node['Validate and Sanitise Input'].json.topic}}\nAudience segment: {{$node['Validate and Sanitise Input'].json.audience_segment}}\n\nRules:\n- Subject line: no emoji, no all-caps, curiosity-driven, under 50 characters\n- Preview text: extends subject, under 90 characters\n- Body: 150-200 words maximum. Direct tone. No filler phrases.\n- CTA: one clear action only. Link: {{$node['Validate and Sanitise Input'].json.cta_url}}\n- Sign-off: {{$node['Validate and Sanitise Input'].json.from_name}}\n\nOutput as JSON with keys: subject, preview_text, body_html, body_plain\n\nDo not include any explanation outside the JSON.",
+        "options": {
+          "temperature": 0.7
+        }
+      },
+      "name": "Generate Email 1 Copy (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 160],
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama3.2:3b"
+            },
+            {
+              "name": "prompt",
+              "value": "You are a professional email copywriter for {{ $node['Validate and Sanitise Input'].json.from_name }}.\n\nWrite Email 1 of a 3-part email sequence.\n\nCampaign type: {{ $node['Validate and Sanitise Input'].json.campaign_type }}\nTopic: {{ $node['Validate and Sanitise Input'].json.topic }}\nAudience: {{ $node['Validate and Sanitise Input'].json.audience_segment }}\n\nRules:\n- Subject line: no emoji, no all-caps, curiosity-driven, under 50 characters\n- Preview text: extends subject, under 90 characters\n- Body: 150-200 words. Direct tone. No filler.\n- CTA: one clear action. URL: {{ $node['Validate and Sanitise Input'].json.cta_url }}\n- Sign-off: {{ $node['Validate and Sanitise Input'].json.from_name }}\n\nOutput ONLY valid JSON: {\"subject\": \"\", \"preview_text\": \"\", \"body_html\": \"\", \"body_plain\": \"\"}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama3.2:3b"
+            },
+            {
+              "name": "prompt",
+              "value": "You are a professional email copywriter for {{ $node['Validate and Sanitise Input'].json.from_name }}.\n\nWrite Email 2 of a 3-part email sequence. This email delivers a key insight or piece of value.\n\nCampaign type: {{ $node['Validate and Sanitise Input'].json.campaign_type }}\nTopic: {{ $node['Validate and Sanitise Input'].json.topic }}\nAudience: {{ $node['Validate and Sanitise Input'].json.audience_segment }}\n\nRules:\n- Subject line: story or insight hook, under 50 characters\n- Preview text: confirms the insight promise\n- Body: 200-250 words. One insight. One example. One takeaway.\n- CTA: deepen engagement (read more / reply / share)\n- Sign-off: {{ $node['Validate and Sanitise Input'].json.from_name }}\n\nOutput ONLY valid JSON: {\"subject\": \"\", \"preview_text\": \"\", \"body_html\": \"\", \"body_plain\": \"\"}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        }
+      },
+      "name": "Generate Email 2 Copy (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama3.2:3b"
+            },
+            {
+              "name": "prompt",
+              "value": "You are a professional email copywriter for {{ $node['Validate and Sanitise Input'].json.from_name }}.\n\nWrite Email 3 of a 3-part email sequence. This is the offer or conversion email.\n\nCampaign type: {{ $node['Validate and Sanitise Input'].json.campaign_type }}\nTopic: {{ $node['Validate and Sanitise Input'].json.topic }}\nOffer: {{ $node['Validate and Sanitise Input'].json.offer }}\nAudience: {{ $node['Validate and Sanitise Input'].json.audience_segment }}\n\nRules:\n- Subject line: direct, benefit-led, under 50 characters\n- Preview text: reinforces the offer\n- Body: 150-180 words. Clear offer. No ambiguity about what the reader should do next.\n- CTA: single, strong, imperative. URL: {{ $node['Validate and Sanitise Input'].json.cta_url }}\n- Sign-off: {{ $node['Validate and Sanitise Input'].json.from_name }}\n\nOutput ONLY valid JSON: {\"subject\": \"\", \"preview_text\": \"\", \"body_html\": \"\", \"body_plain\": \"\"}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        }
+      },
+      "name": "Generate Email 3 Copy (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [900, 440]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Ollama responses — extract JSON from the 'response' field\nfunction parseOllamaResponse(node) {\n  try {\n    const raw = $node[node].json.response;\n    // Extract JSON block (model may wrap it in markdown fences)\n    const match = raw.match(/\\{[\\s\\S]*\\}/);\n    if (!match) throw new Error(`No JSON found in ${node} response`);\n    return JSON.parse(match[0]);\n  } catch (e) {\n    throw new Error(`Failed to parse ${node}: ${e.message}`);\n  }\n}\n\nconst email1 = parseOllamaResponse('Generate Email 1 Copy (Ollama)');\nconst email2 = parseOllamaResponse('Generate Email 2 Copy (Ollama)');\nconst email3 = parseOllamaResponse('Generate Email 3 Copy (Ollama)');\n\nconst campaign = $node['Validate and Sanitise Input'].json;\n\nreturn [{\n  json: {\n    campaign_name: campaign.campaign_name,\n    from_name: campaign.from_name,\n    from_email: campaign.from_email,\n    reply_to: campaign.reply_to,\n    delay_email_2_hours: campaign.delay_email_2_hours,\n    delay_email_3_hours: campaign.delay_email_3_hours,\n    email_1: email1,\n    email_2: email2,\n    email_3: email3,\n    preview_text: `REVIEW REQUIRED — Campaign: ${campaign.campaign_name}\\n\\nEmail 1 Subject: ${email1.subject}\\nEmail 2 Subject: ${email2.subject}\\nEmail 3 Subject: ${email3.subject}`\n  }\n}];"
+      },
+      "name": "Merge and Prepare for Review",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_OPERATOR_CHAT_ID }}",
+        "text": "=📧 *Campaign Copy Ready for Review*\n\nCampaign: {{ $json.campaign_name }}\n\n*Email 1*\nSubject: {{ $json.email_1.subject }}\nPreview: {{ $json.email_1.preview_text }}\n\n*Email 2*\nSubject: {{ $json.email_2.subject }}\nPreview: {{ $json.email_2.preview_text }}\n\n*Email 3*\nSubject: {{ $json.email_3.subject }}\nPreview: {{ $json.email_3.preview_text }}\n\nReview in n8n and approve to send.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Notify Operator — Review Required",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [1340, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "3",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "email_campaigns",
+        "columns": "campaign_name, from_name, from_email, reply_to, audience_segment, email_1_subject, email_1_body, email_2_subject, email_2_body, email_3_subject, email_3_body, status, delay_email_2_hours, delay_email_3_hours, created_at",
+        "additionalFields": {
+          "queryParams": "={{ [$json.campaign_name, $json.from_name, $json.from_email, $json.reply_to, $node['Validate and Sanitise Input'].json.audience_segment, $json.email_1.subject, $json.email_1.body_plain, $json.email_2.subject, $json.email_2.body_plain, $json.email_3.subject, $json.email_3.body_plain, 'pending_review', $json.delay_email_2_hours, $json.delay_email_3_hours, new Date().toISOString()] }}"
+        }
+      },
+      "name": "Save Campaign to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1340, 460],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'pending_review', campaign: $node['Validate and Sanitise Input'].json.campaign_name, message: 'Copy generated. Review notification sent to operator.' }) }}"
+      },
+      "name": "Respond — Pending Review",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1560, 300]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.error }}"
+      },
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [460, 500]
+    }
+  ],
+  "connections": {
+    "Webhook — Campaign Brief Received": {
+      "main": [
+        [
+          {
+            "node": "Validate and Sanitise Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Sanitise Input": {
+      "main": [
+        [
+          {
+            "node": "Fetch Audience Segment (PostgreSQL)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Audience Segment (PostgreSQL)": {
+      "main": [
+        [
+          {
+            "node": "Generate Email 1 Copy (Ollama)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Email 2 Copy (Ollama)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Email 3 Copy (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Email 1 Copy (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Merge and Prepare for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Email 2 Copy (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Merge and Prepare for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Email 3 Copy (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Merge and Prepare for Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge and Prepare for Review": {
+      "main": [
+        [
+          {
+            "node": "Notify Operator — Review Required",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Campaign to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify Operator — Review Required": {
+      "main": [
+        [
+          {
+            "node": "Respond — Pending Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "Error Handler — Universal",
+    "saveDataSuccessExecution": "last",
+    "saveManualExecutions": true,
+    "executionTimeout": 300
+  },
+  "staticData": null,
+  "tags": [
+    "email",
+    "campaign",
+    "marketing",
+    "ollama"
+  ],
+  "_meta": {
+    "instanceId": "technomancer-stack"
+  }
+}

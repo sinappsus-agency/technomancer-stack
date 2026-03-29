@@ -1,0 +1,147 @@
+{
+  "name": "Weekly Intelligence Brief",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1"
+            }
+          ]
+        }
+      },
+      "id": "weekly-trigger",
+      "name": "Every Monday 07:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300],
+      "notes": "Fires every Monday at 07:00 server time. Adjust cron expression if needed: '0 7 * * 1' = Monday 7am."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://www.reddit.com/r/MachineLearning+LocalLLaMA+selfhosted/.json?limit=10&t=week",
+        "options": {}
+      },
+      "id": "fetch-reddit",
+      "name": "Fetch Reddit (AI Topics)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 150],
+      "notes": "Fetches top weekly posts from relevant subreddits. No auth required for public subreddits."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $vars.RSS_FEED_1 || 'https://hnrss.org/frontpage?count=10' }}",
+        "options": {}
+      },
+      "id": "fetch-rss",
+      "name": "Fetch RSS Feed",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300],
+      "notes": "Fetches from RSS_FEED_1 variable. Default: Hacker News front page. Set RSS_FEED_1 in n8n Variables."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "reddit_titles",
+              "value": "={{ $('Fetch Reddit (AI Topics)').item.json.data.children.map(p => '- ' + p.data.title + ' (r/' + p.data.subreddit + ')').join('\\n') }}",
+              "type": "string"
+            },
+            {
+              "name": "collected_at",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "aggregate-sources",
+      "name": "Aggregate Sources",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"mistral\",\n  \"prompt\": \"You are a research assistant for a solo creative technologist. From the following list of articles and posts collected this week, write a 200-word intelligence brief covering: (1) the 2-3 most important trends, (2) anything directly actionable for someone running a self-hosted AI infrastructure, and (3) one thing to watch over the next 2 weeks.\\n\\nSources:\\n{{ $json.reddit_titles }}\\n\\nBrief format: '## This Week in Tech\\n\\n**Key Trends:**\\n...\\n\\n**Actionable for your stack:**\\n...\\n\\n**Watch:**\\n...'\",\n  \"stream\": false\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ai-summarise",
+      "name": "AI: Generate Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 300],
+      "notes": "Uses local Ollama to summarise collected sources into a weekly intelligence brief. Mistral works well for this task."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=📰 *Weekly Intelligence Brief*\n_{{ $('Aggregate Sources').item.json.collected_at.split('T')[0] }}_\n\n{{ $json.response }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-telegram-brief",
+      "name": "Send to Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 300],
+      "notes": "Sends the completed brief to your Telegram. You receive it every Monday morning as a personal briefing."
+    }
+  ],
+  "connections": {
+    "Every Monday 07:00": {
+      "main": [
+        [
+          {"node": "Fetch Reddit (AI Topics)", "type": "main", "index": 0},
+          {"node": "Fetch RSS Feed", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Fetch RSS Feed": {
+      "main": [
+        [{"node": "Aggregate Sources", "type": "main", "index": 0}]
+      ]
+    },
+    "Aggregate Sources": {
+      "main": [
+        [{"node": "AI: Generate Brief", "type": "main", "index": 0}]
+      ]
+    },
+    "AI: Generate Brief": {
+      "main": [
+        [{"node": "Send to Telegram", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Pulls weekly content from Reddit (AI subreddits) and RSS feeds every Monday morning. Summarises them into an intelligence brief using local Ollama and delivers it to Telegram. A lightweight alternative to expensive newsletter curation services.",
+    "chapter_reference": "Part III, Chapter 14 — n8n and the Automation Layer",
+    "repo_path": "n8n-templates/weekly-intelligence-brief.json",
+    "customise_suggestions": [
+      "Change subreddits in the Reddit URL to match your niche",
+      "Set RSS_FEED_1 variable to your preferred RSS source",
+      "Adjust the AI prompt to focus on your specific topics",
+      "Add a Code node to also save the brief to a MinIO file for archiving"
+    ]
+  }
+}

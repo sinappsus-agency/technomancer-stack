@@ -1,0 +1,155 @@
+{
+  "name": "CRM — Welcome & Orientation Sequence",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm/new-subscriber",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-new-subscriber",
+      "name": "New Subscriber Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Triggered by Notifuse when a new contact is added to the main list. Payload includes: email, firstName, source, tags[]"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.email }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-valid-email",
+      "name": "Has Valid Email?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.NOTIFUSE_API_URL }}/contacts/{{ $json.body.email }}/tags",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"tags\": [\"stage::aware\", \"source::{{ $json.body.source || 'unknown' }}\", \"score::cold\"]}",
+        "options": {}
+      },
+      "id": "tag-new-contact",
+      "name": "Tag: stage::aware",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 200],
+      "notes": "Apply initial tags. source:: tag comes from the webhook payload. stage::aware is always applied on first contact."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.NOTIFUSE_API_URL }}/sequences/welcome-orientation/enroll",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"email\": \"{{ $json.body.email }}\", \"firstName\": \"{{ $json.body.firstName }}\"}",
+        "options": {}
+      },
+      "id": "enroll-welcome-sequence",
+      "name": "Enroll in Welcome Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "notes": "Enrolls the contact in the 6-email welcome sequence in Notifuse. Sequence must exist in Notifuse by this name."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=🆕 *New subscriber* added\n\nEmail: `{{ $json.body.email }}`\nFirst name: {{ $json.body.firstName || 'Unknown' }}\nSource: {{ $json.body.source || 'direct' }}\nStage: aware\n\nWelcome sequence triggered ✅",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-telegram",
+      "name": "Notify via Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 200],
+      "notes": "Sends a notification to your personal Telegram bot. Requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in n8n credentials/variables."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"message\": \"Subscriber enrolled\"}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 400,
+        "responseBody": "={\"status\": \"error\", \"message\": \"Invalid payload — email required\"}"
+      },
+      "id": "webhook-error-response",
+      "name": "Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [650, 450]
+    }
+  ],
+  "connections": {
+    "New Subscriber Webhook": {
+      "main": [
+        [{"node": "Has Valid Email?", "type": "main", "index": 0}]
+      ]
+    },
+    "Has Valid Email?": {
+      "main": [
+        [{"node": "Tag: stage::aware", "type": "main", "index": 0}],
+        [{"node": "Error Response", "type": "main", "index": 0}]
+      ]
+    },
+    "Tag: stage::aware": {
+      "main": [
+        [{"node": "Enroll in Welcome Sequence", "type": "main", "index": 0}]
+      ]
+    },
+    "Enroll in Welcome Sequence": {
+      "main": [
+        [{"node": "Notify via Telegram", "type": "main", "index": 0}]
+      ]
+    },
+    "Notify via Telegram": {
+      "main": [
+        [{"node": "Webhook Response", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "error-handler-template"
+  },
+  "meta": {
+    "description": "Handles new subscriber events from Notifuse. Tags the contact with initial stage/source/score tags and enrolls them in the welcome email sequence. Sends a Telegram notification on each new subscriber.",
+    "chapter_reference": "Part II, Chapter 7 — Your CRM Is a Story Engine",
+    "repo_path": "n8n-templates/crm-welcome-orientation.json"
+  }
+}

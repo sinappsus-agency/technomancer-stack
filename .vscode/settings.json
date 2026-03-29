@@ -1,0 +1,40 @@
+{
+  // MCP servers registered for this workspace.
+  // VS Code launches these as background stdio processes when you open the workspace.
+  // Copilot Agent mode can call their tools directly.
+  "mcp": {
+    "servers": {
+      // Local ComfyUI MCP server — connects to the ComfyUI REST API running on this machine.
+      // ComfyUI Desktop or Portable must be running before tool calls will work.
+      // Requires: uv (pip install uv) or Python 3.11+ with mcp installed (pip install mcp).
+      "comfyui-local": {
+        "type": "stdio",
+        "command": "uv",
+        "args": ["run", "${workspaceFolder}/comfyui/mcp/server.py"],
+        "env": {
+          // Override this if ComfyUI is running on a different port or remote host.
+          "COMFYUI_URL": "http://127.0.0.1:8000"
+        }
+      }
+    }
+  },
+
+  // Workspace file associations
+  "files.associations": {
+    "*.hcl": "terraform",
+    "docker-compose*.yml": "dockercompose",
+    "*.env.example": "dotenv"
+  },
+
+  // Recommended extensions for this workspace (also in extensions.json)
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": null,
+
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter"
+  },
+
+  "[json]": {
+    "editor.defaultFormatter": "vscode.json-language-features"
+  }
+}

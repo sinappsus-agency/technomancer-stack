@@ -1,0 +1,518 @@
+###############################################################################
+# Technomancer Stack — Master Docker Compose
+# Full self-hosted infrastructure for the one-person superbrand
+#
+# Services included:
+#   - Traefik (reverse proxy + SSL)
+#   - n8n (workflow automation)
+#   - Notifuse (email marketing)
+#   - MinIO (object storage)
+#   - PostgreSQL (shared database)
+#   - ERPNext (ERP/CRM) — optional, comment out if not needed
+#   - Matomo Analytics (open-source GA replacement)
+#   - Vaultwarden (password manager)
+#   - Uptime Kuma (monitoring)
+#   - Ollama (local AI inference)
+#
+# BEFORE RUNNING:
+# 1. Copy .env.example to .env and fill in all values
+# 2. Create required directories: mkdir -p ./data/{traefik,n8n,postgres,minio,matomo,matomo-db,vaultwarden,ollama,uptime-kuma}
+# 3. Create the Traefik ACME file: touch ./data/traefik/acme.json && chmod 600 ./data/traefik/acme.json
+# 4. Run: docker compose up -d
+#
+# See README.md for full setup instructions.
+###############################################################################
+
+version: "3.8"
+
+##################
+# SHARED NETWORKS
+##################
+networks:
+  traefik-public:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true
+
+##################
+# SHARED VOLUMES
+##################
+volumes:
+  postgres-data:
+  minio-data:
+  n8n-data:
+  ollama-models:
+  vaultwarden-data:
+  uptime-kuma-data:
+  mariadb-data:
+  wordpress-data:
+  matomo-data:
+  matomo-db-data:
+
+###########
+# SERVICES
+###########
+services:
+
+  ##############################################################################
+  # TRAEFIK — Reverse proxy and SSL termination
+  # Handles routing to all services + automatic Let's Encrypt certificates
+  ##############################################################################
+  traefik:
+    image: traefik:v3.1
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - CF_DNS_API_TOKEN=${CLOUDFLARE_DNS_TOKEN}   # Remove if not using Cloudflare DNS challenge
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data/traefik/acme.json:/acme.json
+      - ./config/traefik/traefik.yml:/traefik.yml:ro
+      - ./config/traefik/dynamic.yml:/config/dynamic.yml:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik-dashboard.middlewares=auth-dashboard"
+      # Basic auth for the Traefik dashboard — generate with htpasswd
+      - "traefik.http.middlewares.auth-dashboard.basicauth.users=${TRAEFIK_DASHBOARD_AUTH}"
+      # Global HTTPS redirect
+      - "traefik.http.routers.http-catchall.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.entrypoints=web"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+  ##############################################################################
+  # POSTGRESQL — Shared database for n8n, Notifuse
+  ##############################################################################
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: technomancer
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./config/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ##############################################################################
+  # N8N — Workflow automation engine
+  # Access at: workflow.yourdomain.com
+  ##############################################################################
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # Database
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      # N8N config
+      N8N_HOST: workflow.${BASE_DOMAIN}
+      N8N_PORT: 5678
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: https://workflow.${BASE_DOMAIN}/
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_BASIC_AUTH_ACTIVE: "false"
+      # Timezone
+      GENERIC_TIMEZONE: ${TIMEZONE}
+      TZ: ${TIMEZONE}
+      # Execution limits (prevent runaway workflows)
+      EXECUTIONS_TIMEOUT: 3600
+      EXECUTIONS_TIMEOUT_MAX: 7200
+      # Editor
+      N8N_EDITOR_BASE_URL: https://workflow.${BASE_DOMAIN}
+    volumes:
+      - n8n-data:/home/node/.n8n
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`workflow.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls=true"
+      - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+
+  ##############################################################################
+  # NOTIFUSE — Email marketing and transactional email
+  # Access at: email.yourdomain.com
+  # Note: Notifuse requires its own deployment process — see Notifuse docs
+  ##############################################################################
+  notifuse:
+    image: notifuse/notifuse:latest
+    container_name: notifuse
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/notifuse
+      SECRET_KEY: ${NOTIFUSE_SECRET_KEY}
+      APP_URL: https://email.${BASE_DOMAIN}
+      # SMTP relay configuration (Resend, Postmark, or self-hosted)
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM_EMAIL}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.notifuse.rule=Host(`email.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.notifuse.entrypoints=websecure"
+      - "traefik.http.routers.notifuse.tls=true"
+      - "traefik.http.routers.notifuse.tls.certresolver=letsencrypt"
+      - "traefik.http.services.notifuse.loadbalancer.server.port=3000"
+
+  ##############################################################################
+  # MINIO — S3-compatible object storage
+  # Access at: s3.yourdomain.com (console), s3-api.yourdomain.com (API)
+  ##############################################################################
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+      - backend
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BROWSER_REDIRECT_URL: https://s3.${BASE_DOMAIN}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    labels:
+      - "traefik.enable=true"
+      # API endpoint
+      - "traefik.http.routers.minio-api.rule=Host(`s3-api.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls=true"
+      - "traefik.http.routers.minio-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-api.service=minio-api-svc"
+      - "traefik.http.services.minio-api-svc.loadbalancer.server.port=9000"
+      # Console endpoint
+      - "traefik.http.routers.minio-console.rule=Host(`s3.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls=true"
+      - "traefik.http.routers.minio-console.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-console.service=minio-console-svc"
+      - "traefik.http.services.minio-console-svc.loadbalancer.server.port=9001"
+
+  ##############################################################################
+  # MATOMO ANALYTICS — Full open-source Google Analytics replacement
+  # Access at: analytics.yourdomain.com
+  # No ClickHouse required — uses MariaDB only
+  ##############################################################################
+  matomo:
+    image: matomo:5
+    container_name: matomo
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+      - backend
+    depends_on:
+      matomo-db:
+        condition: service_healthy
+    volumes:
+      - matomo-data:/var/www/html
+    environment:
+      MATOMO_DATABASE_HOST: matomo-db
+      MATOMO_DATABASE_DBNAME: matomo
+      MATOMO_DATABASE_USERNAME: ${MATOMO_DB_USER}
+      MATOMO_DATABASE_PASSWORD: ${MATOMO_DB_PASSWORD}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.matomo.rule=Host(`analytics.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.matomo.entrypoints=websecure"
+      - "traefik.http.routers.matomo.tls=true"
+      - "traefik.http.routers.matomo.tls.certresolver=letsencrypt"
+      - "traefik.http.services.matomo.loadbalancer.server.port=80"
+
+  matomo-db:
+    image: mariadb:11.4
+    container_name: matomo-db
+    restart: unless-stopped
+    networks:
+      - backend
+    volumes:
+      - matomo-db-data:/var/lib/mysql
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MATOMO_DB_ROOT_PASSWORD}
+      MARIADB_DATABASE: matomo
+      MARIADB_USER: ${MATOMO_DB_USER}
+      MARIADB_PASSWORD: ${MATOMO_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      retries: 3
+
+  ##############################################################################
+  # VAULTWARDEN — Self-hosted Bitwarden compatible password manager
+  # Access at: vault.yourdomain.com
+  ##############################################################################
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+    environment:
+      DOMAIN: https://vault.${BASE_DOMAIN}
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN}
+      SIGNUPS_ALLOWED: "false"
+      INVITATIONS_ALLOWED: "true"
+      # Email for account verification
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_FROM: ${SMTP_FROM_EMAIL}
+      SMTP_USERNAME: ${SMTP_USER}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SSL: "true"
+    volumes:
+      - vaultwarden-data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vaultwarden.rule=Host(`vault.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.vaultwarden.entrypoints=websecure"
+      - "traefik.http.routers.vaultwarden.tls=true"
+      - "traefik.http.routers.vaultwarden.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vaultwarden.loadbalancer.server.port=80"
+
+  ##############################################################################
+  # UPTIME KUMA — Service monitoring and alerting
+  # Access at: status.yourdomain.com
+  ##############################################################################
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+    volumes:
+      - uptime-kuma-data:/app/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.uptime-kuma.rule=Host(`status.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.uptime-kuma.entrypoints=websecure"
+      - "traefik.http.routers.uptime-kuma.tls=true"
+      - "traefik.http.routers.uptime-kuma.tls.certresolver=letsencrypt"
+      - "traefik.http.services.uptime-kuma.loadbalancer.server.port=3001"
+
+  ##############################################################################
+  # OLLAMA — Local AI model inference server
+  # API at: http://ollama:11434 (internal only — not exposed publicly)
+  # Accessible from n8n workflows via HTTP Request nodes
+  ##############################################################################
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    # Uncomment if you have a GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    networks:
+      - backend
+    volumes:
+      - ollama-models:/root/.ollama
+    # Ollama is intentionally NOT exposed via Traefik — internal access only
+    # To pull a model: docker exec -it ollama ollama pull llama3.2
+    # n8n workflows access it at: http://ollama:11434
+
+  ##############################################################################
+  # MARIADB — MySQL-compatible database for WordPress
+  # Separate from PostgreSQL — WordPress requires MySQL/MariaDB
+  ##############################################################################
+  mariadb:
+    image: mariadb:11.4
+    container_name: mariadb
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: ${WORDPRESS_DB_USER}
+      MYSQL_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--su-mysql", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ##############################################################################
+  # WORDPRESS + WOOCOMMERCE — Storefront, sales pages, digital products
+  # Access at: shop.yourdomain.com (or your primary domain)
+  # WooCommerce is installed via wp-cli on first run — see below
+  ##############################################################################
+  wordpress:
+    image: wordpress:6.7-php8.3-apache
+    container_name: wordpress
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - traefik-public
+      - backend
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_TABLE_PREFIX: wp_
+      # Security headers and performance
+      WORDPRESS_CONFIG_EXTRA: |
+        define('FS_METHOD', 'direct');
+        define('WP_MEMORY_LIMIT', '256M');
+        define('DISALLOW_FILE_EDIT', true);
+        define('WP_DEBUG', false);
+    volumes:
+      - wordpress-data:/var/www/html
+      - ./config/wordpress/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wordpress.rule=Host(`shop.${BASE_DOMAIN}`)"
+      - "traefik.http.routers.wordpress.entrypoints=websecure"
+      - "traefik.http.routers.wordpress.tls=true"
+      - "traefik.http.routers.wordpress.tls.certresolver=letsencrypt"
+      - "traefik.http.services.wordpress.loadbalancer.server.port=80"
+
+  # WP-CLI — run one-off wp-cli commands to install/manage WordPress
+  # Usage: docker compose run --rm wp-cli [command]
+  # First-run: docker compose run --rm wp-cli core install --url="https://shop.yourdomain.com" --title="Your Site" --admin_user=admin --admin_password=CHANGE_ME --admin_email=you@yourdomain.com
+  # Install WooCommerce: docker compose run --rm wp-cli plugin install woocommerce --activate
+  wp-cli:
+    image: wordpress:cli-2.10-php8.3
+    container_name: wp-cli
+    networks:
+      - backend
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      wordpress:
+        condition: service_started
+    environment:
+      WORDPRESS_DB_HOST: mariadb:3306
+      WORDPRESS_DB_USER: ${WORDPRESS_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${WORDPRESS_DB_PASSWORD}
+      WORDPRESS_DB_NAME: wordpress
+    volumes:
+      - wordpress-data:/var/www/html
+    profiles:
+      - cli
+
+  ##############################################################################
+  # ERPNEXT — ERP and CRM (OPTIONAL — resource-intensive, ~2GB RAM)
+  # Comment out this entire section if not using ERPNext
+  # Access at: erp.yourdomain.com
+  ##############################################################################
+  # erpnext:
+  #   image: frappe/erpnext:v15
+  #   container_name: erpnext
+  #   restart: unless-stopped
+  #   networks:
+  #     - traefik-public
+  #     - backend
+  #   environment:
+  #     DB_HOST: postgres
+  #     DB_PORT: 5432
+  #     REDIS_CACHE: redis://redis:6379/0
+  #     REDIS_QUEUE: redis://redis:6379/1
+  #     REDIS_SOCKETIO: redis://redis:6379/2
+  #     FRAPPE_SITE_URL: erp.${BASE_DOMAIN}
+  #   labels:
+  #     - "traefik.enable=true"
+  #     - "traefik.http.routers.erpnext.rule=Host(`erp.${BASE_DOMAIN}`)"
+  #     - "traefik.http.routers.erpnext.entrypoints=websecure"
+  #     - "traefik.http.routers.erpnext.tls=true"
+  #     - "traefik.http.routers.erpnext.tls.certresolver=letsencrypt"
+  #     - "traefik.http.services.erpnext.loadbalancer.server.port=8080"
+
+  ##############################################################################
+  # AUTOMATED BACKUPS
+  # Backs up PostgreSQL daily and uploads to MinIO
+  ##############################################################################
+  postgres-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    container_name: postgres-backup
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: technomancer,n8n,notifuse
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    volumes:
+      - ./data/backups/postgres:/backups

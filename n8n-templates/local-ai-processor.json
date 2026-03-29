@@ -1,0 +1,217 @@
+{
+  "name": "Local AI Processor — Ollama + OpenRouter Router",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai/process",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "AI Task Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Accepts POST requests with: { task, content, model?, confidential? }. task: 'summarise' | 'draft' | 'extract' | 'classify'. confidential: true → routes to local Ollama."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.confidential }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      },
+      "id": "route-confidential",
+      "name": "Is Confidential?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "notes": "Routes confidential content to local Ollama. Non-confidential content can use OpenRouter (cloud)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $json.body.model || 'mistral' }}\",\n  \"prompt\": \"{{ $json.body.task }}: {{ $json.body.content }}\",\n  \"stream\": false\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "ollama-local",
+      "name": "Ollama (Local)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 150],
+      "notes": "Sends request to local Ollama instance. Returns JSON with 'response' field. Model defaults to 'mistral' if not specified. Timeout set to 120s for larger models."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"{{ $json.body.model || 'openai/gpt-4o-mini' }}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.body.task }}: {{ $json.body.content }}\"\n    }\n  ],\n  \"max_tokens\": 2048\n}",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://workflow.{{ $vars.BASE_DOMAIN }}"
+            },
+            {
+              "name": "X-Title",
+              "value": "Technomancer Stack"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "openrouter-cloud",
+      "name": "OpenRouter (Cloud)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 450],
+      "notes": "Sends request to OpenRouter API. Requires OPENROUTER_API_KEY set as HTTP Header Auth credential named 'openrouter-api'. Model defaults to gpt-4o-mini."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "result",
+              "value": "={{ $json.response }}",
+              "type": "string"
+            },
+            {
+              "name": "provider",
+              "value": "ollama-local",
+              "type": "string"
+            },
+            {
+              "name": "model",
+              "value": "={{ $('Ollama (Local)').item.json.model }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-ollama-output",
+      "name": "Format Ollama Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [850, 150]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "result",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            },
+            {
+              "name": "provider",
+              "value": "openrouter-cloud",
+              "type": "string"
+            },
+            {
+              "name": "model",
+              "value": "={{ $json.model }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "format-openrouter-output",
+      "name": "Format OpenRouter Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [850, 450]
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "id": "merge-outputs",
+      "name": "Merge Outputs",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"result\": \"{{ $json.result }}\",\n  \"provider\": \"{{ $json.provider }}\",\n  \"model\": \"{{ $json.model }}\"\n}"
+      },
+      "id": "webhook-response",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "AI Task Webhook": {
+      "main": [
+        [{"node": "Is Confidential?", "type": "main", "index": 0}]
+      ]
+    },
+    "Is Confidential?": {
+      "main": [
+        [{"node": "Ollama (Local)", "type": "main", "index": 0}],
+        [{"node": "OpenRouter (Cloud)", "type": "main", "index": 0}]
+      ]
+    },
+    "Ollama (Local)": {
+      "main": [
+        [{"node": "Format Ollama Output", "type": "main", "index": 0}]
+      ]
+    },
+    "OpenRouter (Cloud)": {
+      "main": [
+        [{"node": "Format OpenRouter Output", "type": "main", "index": 0}]
+      ]
+    },
+    "Format Ollama Output": {
+      "main": [
+        [{"node": "Merge Outputs", "type": "main", "index": 0}]
+      ]
+    },
+    "Format OpenRouter Output": {
+      "main": [
+        [{"node": "Merge Outputs", "type": "main", "index": 1}]
+      ]
+    },
+    "Merge Outputs": {
+      "main": [
+        [{"node": "Return Result", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Unified AI processing endpoint. Routes requests to local Ollama or cloud OpenRouter based on the 'confidential' flag. Supports any task type via a consistent POST API. Other workflows call this as a sub-workflow or directly via HTTP.",
+    "chapter_reference": "Part II, Chapter 9 — Running AI Locally",
+    "repo_path": "n8n-templates/local-ai-processor.json",
+    "setup_instructions": "1. Import error-handler-template.json first. 2. Ensure Ollama is running (docker compose up -d ollama). 3. Set 'openrouter-api' HTTP Header Auth credential with your OpenRouter key. 4. Activate workflow."
+  }
+}

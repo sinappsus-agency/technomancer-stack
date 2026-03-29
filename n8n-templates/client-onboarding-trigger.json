@@ -1,0 +1,195 @@
+{
+  "name": "Client Onboarding — Booking Trigger",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-onboarding",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "webhook-booking",
+      "name": "Booking Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Receives confirmed booking payload from Calendly, Cal.com, or your booking system. Expected fields: invitee_email, invitee_name, event_type_name, start_time, answers (array of form responses)."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "client-email",
+              "name": "client_email",
+              "value": "={{ $json.body.payload?.invitee?.email ?? $json.body.invitee_email ?? $json.body.email }}",
+              "type": "string"
+            },
+            {
+              "id": "client-name",
+              "name": "client_name",
+              "value": "={{ $json.body.payload?.invitee?.name ?? $json.body.invitee_name ?? $json.body.name }}",
+              "type": "string"
+            },
+            {
+              "id": "booking-type",
+              "name": "booking_type",
+              "value": "={{ $json.body.payload?.event_type?.name ?? $json.body.event_type_name ?? 'Discovery Call' }}",
+              "type": "string"
+            },
+            {
+              "id": "booking-time",
+              "name": "booking_time",
+              "value": "={{ $json.body.payload?.event?.start_time ?? $json.body.start_time }}",
+              "type": "string"
+            },
+            {
+              "id": "project-slug",
+              "name": "project_slug",
+              "value": "={{ ($json.body.payload?.invitee?.name ?? $json.body.invitee_name ?? 'client').toLowerCase().replace(/[^a-z0-9]/g, '-') + '-' + $now.toFormat('yyyyMMdd') }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "extract-booking-data",
+      "name": "Extract Booking Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300],
+      "notes": "Normalises the payload — handles both Calendly v1 and v2 webhook shapes, plus generic booking systems. Generates a project slug for MinIO folder naming."
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://minio:9000/clients/{{ $('Extract Booking Data').item.json.project_slug }}/README.md",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "rawBody": "=# {{ $('Extract Booking Data').item.json.client_name }}\n\nProject folder created: {{ $now.toFormat('dd MMM yyyy') }}\nBooking type: {{ $('Extract Booking Data').item.json.booking_type }}\n\nUpload client files here.",
+        "options": {}
+      },
+      "id": "create-minio-folder",
+      "name": "Create MinIO Client Folder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 150],
+      "notes": "Creates a README.md file in the client's dedicated MinIO folder, which effectively creates the folder. Uses S3-compatible API — MinIO internal hostname (not public URL)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $vars.BASE_DOMAIN }}/notifuse/v1/contacts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "email", "value": "={{ $('Extract Booking Data').item.json.client_email }}"},
+            {"name": "first_name", "value": "={{ $('Extract Booking Data').item.json.client_name.split(' ')[0] }}"},
+            {"name": "tags", "value": "={{ ['stage::client', 'source::calendly', 'type::' + $('Extract Booking Data').item.json.booking_type.toLowerCase().replace(/\\s+/g, '-')] }}"},
+            {"name": "custom_fields", "value": "={{ {project_slug: $('Extract Booking Data').item.json.project_slug, booking_type: $('Extract Booking Data').item.json.booking_type} }}"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "upsert-crm-contact",
+      "name": "Upsert CRM Contact",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "notes": "Creates or updates the contact in Notifuse. Tags with stage::client immediately. The upsert prevents duplicates if the contact already exists from an earlier stage."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $vars.BASE_DOMAIN }}/notifuse/v1/broadcasts/trigger",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {"name": "sequence_id", "value": "={{ $vars.SEQUENCE_ONBOARDING_ID }}"},
+            {"name": "contact_email", "value": "={{ $('Extract Booking Data').item.json.client_email }}"}
+          ]
+        },
+        "options": {}
+      },
+      "id": "start-onboarding-sequence",
+      "name": "Start Onboarding Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 450],
+      "notes": "Enrolls the new client in your Notifuse onboarding email sequence. This sequence typically includes: confirmation email, prep materials, what-to-expect, and first check-in."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=🎉 *New Client Booked!*\n\n👤 *{{ $('Extract Booking Data').item.json.client_name }}*\n📧 `{{ $('Extract Booking Data').item.json.client_email }}`\n📅 {{ $('Extract Booking Data').item.json.booking_type }}\n🕐 {{ $('Extract Booking Data').item.json.booking_time ? DateTime.fromISO($('Extract Booking Data').item.json.booking_time).toFormat('dd MMM yyyy HH:mm') : 'Time TBC' }}\n\n📁 MinIO folder: `clients/{{ $('Extract Booking Data').item.json.project_slug }}/`\n\n✅ CRM tagged + onboarding sequence started",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-new-client",
+      "name": "Notify New Client",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"project_slug\": \"{{ $('Extract Booking Data').item.json.project_slug }}\"}",
+        "options": {}
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1100, 300]
+    }
+  ],
+  "connections": {
+    "Booking Webhook": {
+      "main": [
+        [{"node": "Extract Booking Data", "type": "main", "index": 0}]
+      ]
+    },
+    "Extract Booking Data": {
+      "main": [
+        [
+          {"node": "Create MinIO Client Folder", "type": "main", "index": 0},
+          {"node": "Upsert CRM Contact", "type": "main", "index": 0},
+          {"node": "Start Onboarding Sequence", "type": "main", "index": 0}
+        ]
+      ]
+    },
+    "Upsert CRM Contact": {
+      "main": [
+        [{"node": "Notify New Client", "type": "main", "index": 0}]
+      ]
+    },
+    "Notify New Client": {
+      "main": [
+        [{"node": "Respond Success", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Fires on a confirmed booking. Simultaneously creates a MinIO client folder, upserts the contact in Notifuse CRM with stage::client tag, enrolls them in the onboarding email sequence, and sends a Telegram notification with booking summary.",
+    "chapter_reference": "Part II, Chapter 7 — The CRM as Story Engine",
+    "repo_path": "n8n-templates/client-onboarding-trigger.json",
+    "n8n_variables_required": [
+      "BASE_DOMAIN",
+      "TELEGRAM_CHAT_ID",
+      "SEQUENCE_ONBOARDING_ID"
+    ],
+    "setup_instructions": "1. Copy the webhook URL after activating. 2. In Calendly: Integrations → Webhooks → paste URL, select 'invitee.created' event. 3. For Cal.com: Settings → Webhooks → paste URL. 4. Set all n8n Variables. 5. Add Notifuse API credential to HTTP nodes. 6. Configure MinIO S3 credential or use the httpHeaderAuth with MinIO access key."
+  }
+}

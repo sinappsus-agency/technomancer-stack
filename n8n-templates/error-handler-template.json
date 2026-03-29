@@ -1,0 +1,95 @@
+{
+  "name": "Error Handler — Universal",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "notes": "This workflow is triggered automatically when any workflow that references it in 'Error Workflow' setting encounters an unhandled error."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "workflow_name",
+              "value": "={{ $execution.workflow.name }}",
+              "type": "string"
+            },
+            {
+              "name": "workflow_id",
+              "value": "={{ $execution.workflow.id }}",
+              "type": "string"
+            },
+            {
+              "name": "execution_id",
+              "value": "={{ $execution.id }}",
+              "type": "string"
+            },
+            {
+              "name": "error_message",
+              "value": "={{ $execution.lastNodeExecuted ? $execution.error?.message || 'Unknown error' : 'No node executed' }}",
+              "type": "string"
+            },
+            {
+              "name": "failed_node",
+              "value": "={{ $execution.error?.node?.name || 'Unknown node' }}",
+              "type": "string"
+            },
+            {
+              "name": "timestamp",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-error-details",
+      "name": "Extract Error Details",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=⚠️ *WORKFLOW ERROR*\n\n*Workflow:* `{{ $json.workflow_name }}`\n*Failed node:* `{{ $json.failed_node }}`\n*Error:* {{ $json.error_message }}\n*Time:* {{ $json.timestamp }}\n*Execution ID:* `{{ $json.execution_id }}`\n\n👉 [View in n8n](https://workflow.{{ $vars.BASE_DOMAIN }}/workflow/{{ $json.workflow_id }}/executions/{{ $json.execution_id }})",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "telegram-alert",
+      "name": "Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [650, 300],
+      "notes": "Sends an error notification to your Telegram. Make sure TELEGRAM_BOT_TOKEN credential and TELEGRAM_CHAT_ID variable are set in n8n."
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [{"node": "Extract Error Details", "type": "main", "index": 0}]
+      ]
+    },
+    "Extract Error Details": {
+      "main": [
+        [{"node": "Telegram Alert", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false
+  },
+  "meta": {
+    "description": "Universal error handler workflow. Set this as the 'Error Workflow' in any other workflow's Settings panel. When that workflow fails, this workflow fires and sends a Telegram notification with full error context. Import this workflow first, then reference its name in all other workflows.",
+    "chapter_reference": "Part III, Chapter 14 — n8n and the Automation Layer",
+    "repo_path": "n8n-templates/error-handler-template.json",
+    "setup_instructions": "1. Import this workflow. 2. Activate it. 3. In every other workflow: Settings → Error Workflow → select this workflow. 4. Set TELEGRAM_CHAT_ID in n8n Variables (Settings → Variables)."
+  }
+}

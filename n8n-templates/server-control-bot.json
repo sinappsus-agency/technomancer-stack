@@ -1,0 +1,192 @@
+{
+  "name": "Server Control Bot — Telegram",
+  "nodes": [
+    {
+      "parameters": {
+        "updates": ["message"],
+        "additionalFields": {}
+      },
+      "id": "telegram-trigger",
+      "name": "Telegram Bot Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 300],
+      "notes": "Listens for messages sent to your Telegram bot. Requires TELEGRAM_BOT_TOKEN credential."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.message.from.id.toString() }}",
+              "rightValue": "={{ $vars.TELEGRAM_ALLOWED_USER_ID }}",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "check-authorised-user",
+      "name": "Authorised User?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "notes": "CRITICAL: Only responds to your Telegram user ID. Set TELEGRAM_ALLOWED_USER_ID in n8n Variables. Find your ID at @userinfobot on Telegram."
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.message.text }}",
+        "rules": {
+          "rules": [
+            {
+              "value2": "/status",
+              "output": 0
+            },
+            {
+              "value2": "/logs",
+              "output": 1
+            },
+            {
+              "value2": "/restart",
+              "output": 2
+            },
+            {
+              "value2": "/help",
+              "output": 3
+            }
+          ]
+        },
+        "fallbackOutput": 3
+      },
+      "id": "route-command",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://uptime-kuma:3001/api/status-page/all",
+        "options": {}
+      },
+      "id": "get-uptime-status",
+      "name": "Get Container Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 150],
+      "notes": "Gets status from Uptime Kuma API. Alternative: use a Code node to run 'docker ps' via SSH."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.message.chat.id }}",
+        "text": "=🟢 *Server Status*\n_{{ $now.toFormat('HH:mm UTC') }}_\n\n*Services monitored:* {{ $('Get Container Status').item.json.heartbeatList ? Object.keys($('Get Container Status').item.json.heartbeatList).length : 'Unknown' }}\n\nFor detailed container status use Uptime Kuma:\nhttps://status.{{ $vars.BASE_DOMAIN }}\n\nFor logs: /logs",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-status",
+      "name": "Send Status",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 150]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Bot Trigger').item.json.message.chat.id }}",
+        "text": "=📋 *Recent n8n Executions*\n\nCheck execution logs in your n8n dashboard:\nhttps://workflow.{{ $vars.BASE_DOMAIN }}/executions\n\n_Direct log streaming requires SSH access._",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-logs-info",
+      "name": "Send Logs Info",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Bot Trigger').item.json.message.chat.id }}",
+        "text": "⚠️ *Restart not available via Telegram*\n\nFor safety, service restarts require SSH access.\n\nSSH: `ssh root@{{ $vars.SERVER_IP }}`\nThen: `cd /opt/technomancer/docker && docker compose restart [service]`",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-restart-notice",
+      "name": "Send Restart Notice",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 450],
+      "notes": "Restart via Telegram is disabled for safety — it would require giving n8n SSH access, which is a significant security risk. Direct users to SSH."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Bot Trigger').item.json.message.chat.id }}",
+        "text": "🤖 *Technomancer Control Bot*\n\nAvailable commands:\n\n`/status` — Check service health\n`/logs` — Recent execution log info\n`/help` — This message\n\n*Dashboards:*\n• n8n: https://workflow.{{ $vars.BASE_DOMAIN }}\n• Status: https://status.{{ $vars.BASE_DOMAIN }}\n• Files: https://s3.{{ $vars.BASE_DOMAIN }}\n• Analytics: https://analytics.{{ $vars.BASE_DOMAIN }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "send-help",
+      "name": "Send Help",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1050, 600]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Bot Trigger').item.json.message.chat.id }}",
+        "text": "🚫 Unauthorised access attempt blocked.",
+        "additionalFields": {}
+      },
+      "id": "block-unauthorised",
+      "name": "Block Unauthorised",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [650, 500],
+      "notes": "Silent response to unauthorised users."
+    }
+  ],
+  "connections": {
+    "Telegram Bot Trigger": {
+      "main": [
+        [{"node": "Authorised User?", "type": "main", "index": 0}]
+      ]
+    },
+    "Authorised User?": {
+      "main": [
+        [{"node": "Route Command", "type": "main", "index": 0}],
+        [{"node": "Block Unauthorised", "type": "main", "index": 0}]
+      ]
+    },
+    "Route Command": {
+      "main": [
+        [{"node": "Get Container Status", "type": "main", "index": 0}],
+        [{"node": "Send Logs Info", "type": "main", "index": 0}],
+        [{"node": "Send Restart Notice", "type": "main", "index": 0}],
+        [{"node": "Send Help", "type": "main", "index": 0}]
+      ]
+    },
+    "Get Container Status": {
+      "main": [
+        [{"node": "Send Status", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": false,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Telegram bot interface for basic server status queries. Authorisation is enforced by matching the sender's Telegram user ID to a known-good value. Restart commands are intentionally blocked — they require SSH for safety.",
+    "chapter_reference": "Part II, Chapter 8 — The Self-Hosted Sovereign",
+    "repo_path": "n8n-templates/server-control-bot.json",
+    "security_note": "CRITICAL: Set TELEGRAM_ALLOWED_USER_ID before activating this workflow. Without it, anyone who knows your bot token can query your server status.",
+    "setup_instructions": "1. Create a Telegram Bot via @BotFather. Get the token. 2. Find your Telegram user ID via @userinfobot. 3. In n8n: add Telegram Bot credential with your token. 4. Set TELEGRAM_ALLOWED_USER_ID variable to your user ID. 5. Set BASE_DOMAIN and SERVER_IP variables. 6. Activate workflow. 7. Send /help to your bot."
+  }
+}

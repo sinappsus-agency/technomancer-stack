@@ -1,0 +1,39 @@
+<clickhouse>
+    <!-- ClickHouse server configuration for Plausible Analytics -->
+    <!-- Mounted at /etc/clickhouse-server/config.d/logging.xml -->
+    <!-- Only overrides logging and storage — all other defaults are kept. -->
+
+    <logger>
+        <!-- Reduce log verbosity — ClickHouse is chatty at default INFO level -->
+        <level>warning</level>
+        <log>/var/log/clickhouse-server/clickhouse-server.log</log>
+        <errorlog>/var/log/clickhouse-server/clickhouse-server.err.log</errorlog>
+        <size>25M</size>
+        <count>3</count>
+        <!-- Flush logs to disk every 5 seconds instead of default 1 second -->
+        <flush_interval_milliseconds>5000</flush_interval_milliseconds>
+    </logger>
+
+    <!-- Disable Prometheus metrics endpoint (not needed for self-hosted setup) -->
+    <prometheus>
+        <endpoint>/metrics</endpoint>
+        <port>9363</port>
+        <!-- Set to false to disable -->
+        <metrics>false</metrics>
+        <events>false</events>
+        <asynchronous_metrics>false</asynchronous_metrics>
+    </prometheus>
+
+    <!-- Limit max memory usage to avoid OOM on small VPS -->
+    <!-- Plausible with low-moderate traffic needs ~512MB-1GB -->
+    <max_server_memory_usage_to_ram_ratio>0.3</max_server_memory_usage_to_ram_ratio>
+
+    <!-- Reduce background merge threads on small VPS -->
+    <background_pool_size>2</background_pool_size>
+    <background_schedule_pool_size>4</background_schedule_pool_size>
+
+    <!-- Disable crash reports (telemetry) -->
+    <send_crash_reports>
+        <enabled>false</enabled>
+    </send_crash_reports>
+</clickhouse>

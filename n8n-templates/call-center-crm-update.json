@@ -1,0 +1,365 @@
+{
+  "name": "Call Center — Inbound CRM Update",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "call-center-event",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode"
+      },
+      "name": "Webhook — Call Event Received",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "call-center-event",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "1",
+          "name": "n8n Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body;\n\n// Validate required fields\nconst required = ['call_id', 'caller_number', 'call_type', 'duration_seconds', 'transcript'];\nconst missing = required.filter(f => !body[f]);\n\nif (missing.length > 0) {\n  throw new Error(`Missing fields: ${missing.join(', ')}`);\n}\n\n// Sanitise: strip any HTML from transcript\nfunction stripHtml(str) {\n  return String(str || '').replace(/<[^>]*>/g, '').trim();\n}\n\n// call_type: inbound_lead | appointment_set | support | other\n// outcome: interested | not_interested | appointment_set | callback_requested | wrong_number\n\nreturn [{\n  json: {\n    call_id: stripHtml(body.call_id),\n    caller_number: stripHtml(body.caller_number),\n    caller_name: stripHtml(body.caller_name || 'Unknown'),\n    call_type: stripHtml(body.call_type),\n    outcome: stripHtml(body.outcome || 'pending_review'),\n    duration_seconds: parseInt(body.duration_seconds, 10),\n    transcript: stripHtml(body.transcript),\n    appointment_datetime: body.appointment_datetime || null,\n    ai_summary: stripHtml(body.ai_summary || ''),\n    recording_path: stripHtml(body.recording_path || ''),\n    received_at: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Validate and Sanitise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ollama:11434/api/generate",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama3.2:3b"
+            },
+            {
+              "name": "prompt",
+              "value": "You are a CRM assistant. Analyse this call transcript and produce a structured summary.\n\nCall type: {{ $json.call_type }}\nDuration: {{ $json.duration_seconds }} seconds\nTranscript:\n{{ $json.transcript }}\n\nOutput ONLY valid JSON with these keys:\n{\n  \"lead_score\": 1-10 (10 = hot lead, 1 = not a lead),\n  \"intent\": one sentence describing what the caller wanted,\n  \"pain_points\": array of up to 3 specific problems mentioned,\n  \"next_action\": specific recommended next action for the operator,\n  \"crm_note\": 2-3 sentence professional CRM note to add to the contact record,\n  \"urgency\": \"high\" | \"medium\" | \"low\"\n}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        }
+      },
+      "name": "Analyse Transcript (Ollama)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Ollama analysis\nconst raw = $input.first().json.response;\nconst match = raw.match(/\\{[\\s\\S]*\\}/);\nif (!match) throw new Error('No JSON in Ollama response');\n\nlet analysis;\ntry {\n  analysis = JSON.parse(match[0]);\n} catch (e) {\n  throw new Error(`JSON parse error: ${e.message}`);\n}\n\nconst call = $node['Validate and Sanitise'].json;\n\nreturn [{\n  json: {\n    ...call,\n    lead_score: analysis.lead_score || 0,\n    intent: analysis.intent || '',\n    pain_points: analysis.pain_points || [],\n    next_action: analysis.next_action || '',\n    crm_note: analysis.crm_note || '',\n    urgency: analysis.urgency || 'low',\n    is_hot_lead: (analysis.lead_score || 0) >= 7\n  }\n}];"
+      },
+      "name": "Parse Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, email FROM tabLead WHERE mobile_no = $1 OR phone = $1 LIMIT 1;",
+        "additionalFields": {
+          "queryParams": "={{ [$json.caller_number] }}"
+        }
+      },
+      "name": "Look Up Lead in ERPNext (PostgreSQL)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1120, 300],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "rules": [
+            {
+              "operation": "exists",
+              "value1": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "name": "Lead Exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tabActivity (name, owner, creation, modified, modified_by, docstatus, idx, subject, type, reference_doctype, reference_name, content, status)\nVALUES (gen_random_uuid()::text, 'Administrator', NOW(), NOW(), 'Administrator', 0, 0, $1, 'Phone Call', 'Lead', $2, $3, 'Closed')\nON CONFLICT DO NOTHING;",
+        "additionalFields": {
+          "queryParams": "={{ [`Call ${$node['Validate and Sanitise'].json.call_id} — ${$node['Parse Analysis'].json.intent}`, $node['Look Up Lead in ERPNext (PostgreSQL)'].json.id, $node['Parse Analysis'].json.crm_note] }}"
+        }
+      },
+      "name": "Add CRM Note to Existing Lead",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1560, 200],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO tabLead (name, owner, creation, modified, modified_by, docstatus, idx, lead_name, mobile_no, source, status, notes)\nVALUES (gen_random_uuid()::text, 'Administrator', NOW(), NOW(), 'Administrator', 0, 0, $1, $2, 'Call Center', 'Open', $3)\nRETURNING id, name;",
+        "additionalFields": {
+          "queryParams": "={{ [$node['Validate and Sanitise'].json.caller_name, $node['Validate and Sanitise'].json.caller_number, $node['Parse Analysis'].json.crm_note] }}"
+        }
+      },
+      "name": "Create New Lead in ERPNext",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1560, 400],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "table": "call_log",
+        "columns": "call_id, caller_number, caller_name, call_type, outcome, duration_seconds, transcript, ai_summary, lead_score, urgency, next_action, recording_path, created_at",
+        "additionalFields": {
+          "queryParams": "={{ [$json.call_id, $json.caller_number, $json.caller_name, $json.call_type, $json.outcome, $json.duration_seconds, $json.transcript, $json.crm_note, $json.lead_score, $json.urgency, $json.next_action, $json.recording_path, $json.received_at] }}"
+        }
+      },
+      "name": "Log Call to call_log Table",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1780, 300],
+      "credentials": {
+        "postgres": {
+          "id": "2",
+          "name": "PostgreSQL — Main"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $node['Parse Analysis'].json.is_hot_lead }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Hot Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1780, 140]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_OPERATOR_CHAT_ID }}",
+        "text": "=🔥 *Hot Lead — Inbound Call*\n\nCaller: {{ $node['Validate and Sanitise'].json.caller_name }} ({{ $node['Validate and Sanitise'].json.caller_number }})\nScore: {{ $node['Parse Analysis'].json.lead_score }}/10\nUrgency: {{ $node['Parse Analysis'].json.urgency }}\n\nIntent: {{ $node['Parse Analysis'].json.intent }}\n\nNext action: {{ $node['Parse Analysis'].json.next_action }}\n\nCRM note added. Follow up now.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "name": "Alert Operator — Hot Lead",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [2000, 60],
+      "credentials": {
+        "telegramApi": {
+          "id": "3",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'logged', call_id: $node['Validate and Sanitise'].json.call_id }) }}"
+      },
+      "name": "Respond — OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 300]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.error }}"
+      },
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [460, 500]
+    }
+  ],
+  "connections": {
+    "Webhook — Call Event Received": {
+      "main": [
+        [
+          {
+            "node": "Validate and Sanitise",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Sanitise": {
+      "main": [
+        [
+          {
+            "node": "Analyse Transcript (Ollama)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyse Transcript (Ollama)": {
+      "main": [
+        [
+          {
+            "node": "Parse Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Analysis": {
+      "main": [
+        [
+          {
+            "node": "Look Up Lead in ERPNext (PostgreSQL)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Look Up Lead in ERPNext (PostgreSQL)": {
+      "main": [
+        [
+          {
+            "node": "Lead Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lead Exists?": {
+      "main": [
+        [
+          {
+            "node": "Add CRM Note to Existing Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create New Lead in ERPNext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add CRM Note to Existing Lead": {
+      "main": [
+        [
+          {
+            "node": "Log Call to call_log Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create New Lead in ERPNext": {
+      "main": [
+        [
+          {
+            "node": "Log Call to call_log Table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Call to call_log Table": {
+      "main": [
+        [
+          {
+            "node": "Hot Lead?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond — OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hot Lead?": {
+      "main": [
+        [
+          {
+            "node": "Alert Operator — Hot Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "errorWorkflow": "Error Handler — Universal",
+    "saveDataSuccessExecution": "last",
+    "saveManualExecutions": true,
+    "executionTimeout": 120
+  },
+  "staticData": null,
+  "tags": [
+    "call-center",
+    "crm",
+    "inbound",
+    "erp"
+  ],
+  "_meta": {
+    "instanceId": "technomancer-stack"
+  }
+}

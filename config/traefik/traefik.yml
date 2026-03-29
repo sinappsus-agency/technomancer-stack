@@ -1,0 +1,83 @@
+# Traefik Static Configuration
+# c:\Users\artgr\OneDrive\BACKUP\HTH\technomancer-stack\config\traefik\traefik.yml
+# This file is mounted into the Traefik container at /config/traefik.yml
+
+api:
+  dashboard: true
+  # Dashboard is exposed via docker-compose label behind basicauth middleware.
+  # Never expose with insecure: true in production.
+
+log:
+  level: WARN
+  # Options: DEBUG, INFO, WARN, ERROR
+  # Use DEBUG temporarily when diagnosing certificate or routing issues.
+
+accessLog:
+  filePath: /logs/access.log
+  bufferingSize: 100
+  filters:
+    statusCodes:
+      - "400-599"
+  fields:
+    defaultMode: keep
+    names:
+      ClientUsername: drop
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Authorization: drop
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls:
+        certResolver: letsencrypt
+    # HTTP/3 (QUIC) support — optional, requires UDP 443 open in firewall
+    # http3: {}
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: "${LETSENCRYPT_EMAIL}"
+      storage: /acme.json
+      # Using TLS challenge — no port 80 dependency.
+      # Switch to httpChallenge if you prefer:
+      # httpChallenge:
+      #   entryPoint: web
+      tlsChallenge: {}
+      # Uncomment for DNS challenge with Cloudflare (wildcard certs):
+      # dnsChallenge:
+      #   provider: cloudflare
+      #   resolvers:
+      #     - "1.1.1.1:53"
+      #     - "8.8.8.8:53"
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: traefik-public
+    # Only services with traefik.enable=true label are routed.
+    watch: true
+
+  file:
+    filename: /config/dynamic.yml
+    watch: true
+    # Dynamic config (middleware, TLS options) reloads without restarting Traefik.
+
+serversTransport:
+  # Increase timeouts for large file uploads (MinIO) and long AI generations (Ollama via n8n)
+  forwardingTimeouts:
+    dialTimeout: 30s
+    responseHeaderTimeout: 120s
+    idleConnTimeout: 90s

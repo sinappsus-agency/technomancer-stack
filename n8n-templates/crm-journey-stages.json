@@ -1,0 +1,257 @@
+{
+  "name": "CRM — Journey Stage Manager",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "crm-stage-update",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-stage-trigger",
+      "name": "Stage Update Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [250, 300],
+      "notes": "Receives engagement events from Notifuse (link clicks, email opens, form submissions). Payload should include contact_email, event_type, and optionally current_stage."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.contact_email }}",
+              "rightValue": "",
+              "operator": {"type": "string", "operation": "notEmpty"}
+            },
+            {
+              "leftValue": "={{ $json.body.event_type }}",
+              "rightValue": "",
+              "operator": {"type": "string", "operation": "notEmpty"}
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "validate-payload",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "new-stage",
+              "name": "new_stage",
+              "value": "={{ (() => { const e = $json.body.event_type; if (e === 'pricing_click' || e === 'service_page_view') return 'evaluating'; if (e === 'booking_started' || e === 'application_started') return 'deciding'; if (e === 'payment_completed' || e === 'contract_signed') return 'client'; if (e === 'unsubscribe') return 'churned'; return 'engaged'; })() }}",
+              "type": "string"
+            },
+            {
+              "id": "contact-email",
+              "name": "contact_email",
+              "value": "={{ $json.body.contact_email }}",
+              "type": "string"
+            },
+            {
+              "id": "event-type",
+              "name": "event_type",
+              "value": "={{ $json.body.event_type }}",
+              "type": "string"
+            },
+            {
+              "id": "stage-tag",
+              "name": "stage_tag",
+              "value": "=stage::{{ $json.body.event_type === 'pricing_click' || $json.body.event_type === 'service_page_view' ? 'evaluating' : $json.body.event_type === 'booking_started' || $json.body.event_type === 'application_started' ? 'deciding' : $json.body.event_type === 'payment_completed' || $json.body.event_type === 'contract_signed' ? 'client' : $json.body.event_type === 'unsubscribe' ? 'churned' : 'engaged' }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "map-event-to-stage",
+      "name": "Map Event to Stage",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [650, 200],
+      "notes": "Translates raw event types into Hero's Journey CRM stages. Extend this mapping as you add new engagement events."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $vars.BASE_DOMAIN }}/notifuse/v1/contacts/tags",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "email",
+              "value": "={{ $('Map Event to Stage').item.json.contact_email }}"
+            },
+            {
+              "name": "tags",
+              "value": "={{ [$('Map Event to Stage').item.json.stage_tag] }}"
+            },
+            {
+              "name": "remove_tags_prefix",
+              "value": "stage::"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "update-notifuse-tag",
+      "name": "Update Stage Tag in Notifuse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "notes": "Updates the contact's stage:: tag in Notifuse. The remove_tags_prefix field clears all existing stage:: tags before applying the new one, so only one stage tag exists per contact at any time."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $('Map Event to Stage').item.json.new_stage }}",
+              "rightValue": "engaged",
+              "operator": {"type": "string", "operation": "notEquals"}
+            }
+          ]
+        }
+      },
+      "id": "should-change-sequence",
+      "name": "Change Sequence?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 200],
+      "notes": "Only trigger a sequence change for meaningful stage transitions (not generic 'engaged' events)."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://{{ $vars.BASE_DOMAIN }}/notifuse/v1/broadcasts/trigger",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "sequence_id",
+              "value": "={{ $('Map Event to Stage').item.json.new_stage === 'evaluating' ? $vars.SEQUENCE_EVALUATING_ID : $('Map Event to Stage').item.json.new_stage === 'deciding' ? $vars.SEQUENCE_DECIDING_ID : $('Map Event to Stage').item.json.new_stage === 'client' ? $vars.SEQUENCE_ONBOARDING_ID : $vars.SEQUENCE_REENGAGEMENT_ID }}"
+            },
+            {
+              "name": "contact_email",
+              "value": "={{ $('Map Event to Stage').item.json.contact_email }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "enroll-new-sequence",
+      "name": "Enroll in New Sequence",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 100],
+      "notes": "Triggers the appropriate Notifuse sequence for the new stage. Set SEQUENCE_EVALUATING_ID, SEQUENCE_DECIDING_ID, SEQUENCE_ONBOARDING_ID and SEQUENCE_REENGAGEMENT_ID in n8n Variables with your actual Notifuse sequence IDs."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $vars.TELEGRAM_CHAT_ID }}",
+        "text": "=📊 *Stage Transition*\n\n👤 `{{ $('Map Event to Stage').item.json.contact_email }}`\n🔄 Event: `{{ $('Map Event to Stage').item.json.event_type }}`\n🎯 New Stage: *{{ $('Map Event to Stage').item.json.stage_tag }}*\n\n_{{ $now.toFormat('dd MMM HH:mm') }}_",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "notify-stage-change",
+      "name": "Notify Stage Change",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1250, 300],
+      "notes": "Telegram notification for meaningful stage changes. Gives real-time awareness of high-intent signals like pricing page clicks."
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"stage\": \"{{ $('Map Event to Stage').item.json.new_stage }}\"}",
+        "options": {}
+      },
+      "id": "respond-ok",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "{\"status\": \"error\", \"message\": \"Missing contact_email or event_type\"}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "respond-invalid",
+      "name": "Respond 400 Invalid",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [650, 450]
+    }
+  ],
+  "connections": {
+    "Stage Update Webhook": {
+      "main": [
+        [{"node": "Validate Payload", "type": "main", "index": 0}]
+      ]
+    },
+    "Validate Payload": {
+      "main": [
+        [{"node": "Map Event to Stage", "type": "main", "index": 0}],
+        [{"node": "Respond 400 Invalid", "type": "main", "index": 0}]
+      ]
+    },
+    "Map Event to Stage": {
+      "main": [
+        [{"node": "Update Stage Tag in Notifuse", "type": "main", "index": 0}]
+      ]
+    },
+    "Update Stage Tag in Notifuse": {
+      "main": [
+        [{"node": "Change Sequence?", "type": "main", "index": 0}]
+      ]
+    },
+    "Change Sequence?": {
+      "main": [
+        [
+          {"node": "Enroll in New Sequence", "type": "main", "index": 0},
+          {"node": "Notify Stage Change", "type": "main", "index": 0}
+        ],
+        [{"node": "Respond OK", "type": "main", "index": 0}]
+      ]
+    },
+    "Enroll in New Sequence": {
+      "main": [
+        [{"node": "Respond OK", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "errorWorkflow": "Error Handler — Universal"
+  },
+  "meta": {
+    "description": "Maps Notifuse engagement events to Hero's Journey CRM stage tags (aware → engaged → evaluating → deciding → client → churned). On meaningful stage transitions, removes the old stage:: tag, applies the new one, and enrolls the contact in the appropriate Notifuse sequence.",
+    "chapter_reference": "Part II, Chapter 7 — The CRM as Story Engine",
+    "repo_path": "n8n-templates/crm-journey-stages.json",
+    "n8n_variables_required": [
+      "BASE_DOMAIN",
+      "TELEGRAM_CHAT_ID",
+      "SEQUENCE_EVALUATING_ID",
+      "SEQUENCE_DECIDING_ID",
+      "SEQUENCE_ONBOARDING_ID",
+      "SEQUENCE_REENGAGEMENT_ID"
+    ],
+    "setup_instructions": "1. Set all required n8n Variables listed above. 2. Create Notifuse sequences for each stage. 3. Configure Notifuse webhook to POST to this workflow's webhook URL on link_click and form_submit events. 4. Add the Notifuse API credential to the HTTP Request nodes."
+  }
+}
