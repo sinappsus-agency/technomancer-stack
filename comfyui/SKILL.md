@@ -297,11 +297,8 @@ Store the MinIO object URL (`http://localhost:9000/technomancer-content/generate
 |------|-------------|
 | `workflows/sdxl-basic-t2i.json` | SDXL text-to-image, API format, parameterised prompts |
 | `workflows/ltx23-img-audio-to-video.json` | LTX-Video 2.3 image+audio-to-video, 53 nodes |
-| `workflows/sdxl-with-refiner.json` | SDXL base + refiner pipeline for highest quality |
-| `workflows/flux-dev-t2i.json` | Flux.1 Dev text-to-image |
-| `workflows/animatediff-t2v.json` | SDXL + AnimateDiff motion module, outputs MP4 |
-| `workflows/wan21-t2v.json` | Wan2.1 text-to-video (requires 24GB+ VRAM) |
-| `workflows/img2img-sdxl.json` | SDXL image-to-image with strength parameter |
+
+Additional templates can be created by importing your own ComfyUI workflows using the MCP server's `import_workflow()` tool. See the workflow import section below for details.
 
 Templates are auto-generated from workflow imports. To add new ones, see the workflow import section below.
 

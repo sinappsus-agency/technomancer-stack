@@ -28,3 +28,9 @@ desktop.ini
 
 # Test outputs
 test/
+
+# ComfyUI development scripts (keep out of public repo)
+comfyui/_*.py
+comfyui/_*.json
+comfyui/debug_*.py
+comfyui/test_*.py

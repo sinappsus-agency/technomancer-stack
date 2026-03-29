@@ -49,9 +49,19 @@ technomancer-stack/
 │
 ├── config/
 │   ├── traefik/                # Traefik v3 static + dynamic config
-│   └── postgres/               # PostgreSQL init SQL + role grants
+│   ├── postgres/               # PostgreSQL init SQL + role grants
+│   └── clickhouse/             # ClickHouse analytics database config
+│
+├── comfyui/                    # Visual production layer — image + video generation
+│   ├── SKILL.md                # Agent skill — model reference, prompt engineering, API docs
+│   ├── mcp/
+│   │   ├── server.py           # 15-tool MCP server (ComfyUI ↔ VS Code bridge)
+│   │   └── README.md           # MCP server setup guide
+│   ├── workflows/              # Parameterized workflow templates (ready to run)
+│   └── exports/                # Staging area — drop raw ComfyUI exports here for import
 │
 ├── n8n-templates/              # Importable n8n workflow JSON files
+│   ├── README.md               # Template index + chapter mapping
 │   ├── client-onboarding-trigger.json
 │   ├── crm-welcome-orientation.json
 │   ├── crm-journey-stages.json
@@ -66,17 +76,16 @@ technomancer-stack/
 ├── agents/
 │   ├── README.md                       # Agent system overview + integration map
 │   ├── content-machine/                # 6-agent content production pipeline
-│   │   └── README.md
 │   ├── mcp-servers/                    # Model Context Protocol server configs
-│   │   └── README.md                  # filesystem, n8n-trigger, memory, web-search, database
 │   ├── personal-ai-infrastructure/     # 4-level context hierarchy + memory store
-│   │   └── README.md
 │   ├── call-center/                    # Automated inbound/outbound call system
-│   │   └── README.md                  # FreeSWITCH + Whisper + Ollama + Piper TTS + Drachtio handler code
 │   ├── openclaw/                       # OpenClaw AI agent platform integration
-│   │   └── README.md                  # Setup, skills, WooCommerce/Notifuse/n8n connections
-│   └── paperclip/                      # Paperclip agent control plane
-│       └── README.md                  # Org chart, agent workforce management, budget governance
+│   ├── paperclip/                      # Paperclip agent control plane
+│   └── think-tank-prompts/             # Multi-agent decision prompts
+│
+├── iot/                                # Physical layer — hardware + sensors
+│   ├── mqtt/                           # MQTT broker configs and topic schemas
+│   └── biometric-resonance/            # Heart coherence + collective resonance
 │
 ├── sops/                               # Standard Operating Procedures — all 13 runnable
 │   ├── README.md
@@ -102,11 +111,12 @@ technomancer-stack/
 │       ├── channel-formats.md  # Format specs: email, LinkedIn, Twitter, video, blog, podcast
 │       └── email-campaign.md  # Ready-to-use prompts for all email campaign types
 │
-└── workbook/
-    ├── narrative/              # Story arc and platform character exercises
-    ├── stack/                  # Minimum effective stack planning
-    ├── automation/             # Automation audit template
-    └── risk/                   # Risk register template
+└── workbook/                   # Interactive planning templates — fill out alongside the book
+    ├── narrative/              # Story arc and platform character exercises (Ch 2)
+    ├── stack/                  # Minimum effective stack + ComfyUI workflow planning (Ch 5, 11)
+    ├── automation/             # Automation audit template (Ch 16)
+    ├── agents/                 # Agent deployment checklist (Ch 12)
+    └── risk/                   # Risk register template (Ch 19)
 ```
 
 ---
@@ -129,15 +139,49 @@ Each directory maps to specific chapters in the book:
 | `n8n-templates/` | Chapter 14 — n8n and the Automation Layer |
 | `n8n-templates/email-campaign-workflow.json` | Chapter 15 — The Distribution Engine |
 | `n8n-templates/call-center-crm-update.json` | Chapter 14 — n8n and the Automation Layer |
+| `comfyui/` | Chapter 11 — The Visual Stack: ComfyUI, Stable Diffusion, and Generative Media |
+| `comfyui/mcp/` | Chapter 11 — MCP bridge for programmatic image/video generation |
+| `comfyui/workflows/` | Chapter 11 — Parameterized workflow templates (SDXL, LTX Video) |
+| `iot/mqtt/` | Chapter 10 — IoT and the Physical Layer |
+| `iot/biometric-resonance/` | Chapter 10 — Heart coherence + collective resonance sensor integration |
 | `prompts/brand/` | Chapter 1 — The Origin Stack |
 | `prompts/verification/` | Chapter 6 — AI as Creative Clone |
 | `prompts/workflow/channel-formats.md` | Chapter 2 — Narrative Systems |
 | `prompts/workflow/email-campaign.md` | Chapter 15 — The Distribution Engine |
 | `workbook/narrative/` | Chapter 2 — Narrative Systems |
 | `workbook/stack/` | Chapter 5 — The Techno Stack |
-| `workbook/automation/` | Chapter 14 — n8n and the Automation Layer |
-| `workbook/risk/` | Chapter 17 — The Risks You Were Not Warned About |
+| `workbook/automation/` | Chapter 16 — The Automation Audit |
+| `workbook/agents/` | Chapter 12 — Agent Deployment |
+| `workbook/risk/` | Chapter 19 — The Risks You Were Not Warned About |
 | `sops/` | Throughout — SOP library referenced across all operational chapters |
+
+---
+
+## Using the Workbook
+
+The `workbook/` directory contains interactive planning templates designed to be filled out as you read. Each template corresponds to a specific chapter and builds on the previous one:
+
+1. **Narrative** (`workbook/narrative/`) — Define your origin story, brand voice, and platform character. Start here alongside Chapter 2.
+2. **Stack** (`workbook/stack/`) — Map your minimum effective stack and plan your ComfyUI visual production workflows. Use with Chapters 5 and 11.
+3. **Agents** (`workbook/agents/`) — Agent deployment checklist: which agents to build, what they connect to, and how they hand off to humans. Use with Chapter 12.
+4. **Automation** (`workbook/automation/`) — Audit your current manual processes and identify what to automate first. Use with Chapter 16.
+5. **Risk** (`workbook/risk/`) — Risk register for AI operations: bias, hallucination, data exposure, vendor lock-in. Use with Chapter 19.
+
+Each template is a markdown file you can edit directly or copy into your own project. The goal is a working operational blueprint — not a theoretical exercise.
+
+---
+
+## Using ComfyUI
+
+The `comfyui/` directory contains a complete visual production layer that bridges VS Code to ComfyUI for programmatic image and video generation. See the [comfyui/README.md](comfyui/README.md) for full setup instructions.
+
+**Quick overview:**
+- `comfyui/mcp/server.py` — 15-tool MCP server that lets your AI assistant queue ComfyUI jobs, poll for results, and download outputs directly from the chat interface
+- `comfyui/workflows/` — Parameterized workflow templates (SDXL text-to-image, LTX 2.3 image+audio-to-video)
+- `comfyui/exports/` — Drop zone for raw ComfyUI API exports; use `import_workflow()` to convert them into parameterized templates
+- `comfyui/SKILL.md` — Agent skill reference: model specs, prompt engineering rules, resolution tables
+
+This integrates with Chapter 11 — The Visual Stack. You need ComfyUI Desktop installed locally (the MCP server connects to `http://127.0.0.1:8188` by default).
 
 ---
 
